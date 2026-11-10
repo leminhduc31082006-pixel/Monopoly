@@ -1,23 +1,46 @@
 package engine.bot;
 
+import model.GameRoom;
+import model.Player;
+import model.RoomStatus;
 import engine.GameEngine;
 
-/**
- * Controller tự động cho người chơi bot hoặc khi người chơi timeout.
- * <p>
- * HƯỚNG DẪN TRIỂN KHAI:
- * - Khi người chơi AFK / Timeout hoặc là Bot, BotController thay mặt thực hiện:
- *   1. Gieo xúc xắc nếu đang ở phase AWAITING_ROLL.
- *   2. Đưa ra quyết định mua đất nếu đủ tiền (VD: số dư >= 3 lần giá mua).
- *   3. Kết thúc lượt để chuyển quyền cho người tiếp theo, không làm treo ván chơi.
- */
-public class BotController {
+import java.util.OptionalInt;
 
-    public static void processBotTurn(GameEngine engine) {
-        // TODO:
-        // 1. Lấy người chơi hiện tại từ engine.getRoom()
-        // 2. Tự động gọi engine.rollDice(...) nếu đang ở phase AWAITING_ROLL
-        // 3. Tự động mua đất nếu đang ở ô đất trống và đủ tiền
-        // 4. Gọi engine.endTurn(...) để hoàn tất lượt
+/**
+ * Bot: tự gieo xúc xắc, nộp bảo lãnh khi ở tù nếu dư dả, mua đất khi số dư >= 3 lần giá,
+ * rồi kết thúc lượt. Luôn đi qua các command của engine nên chịu cùng validate như người chơi thật.
+ * Chỉ được gọi từ bên trong engine (khi engine đang giữ lock).
+ */
+public class BotController implements BotStrategy {
+    public static final int RICH_MULTIPLIER = 3;
+    private static final int MAX_STEPS = 8;     // đủ cho tối đa 3 lần gieo (đổ đôi) trong một lượt
+
+    @Override
+    public void playTurn(GameEngine engine, Player player) {
+        String id = player.getId();
+        GameRoom room = engine.getRoom();
+        int turnId = room.getTurnId();
+
+        for (int i = 0; i < MAX_STEPS; i++) {
+            if (room.getTurnId() != turnId || room.getStatus() != RoomStatus.PLAYING) return;
+
+            switch (engine.getCurrentPhase()) {
+                case AWAITING_ROLL -> {
+                    if (player.isInJail() && player.getMoney() >= RICH_MULTIPLIER * GameEngine.BAIL_AMOUNT) {
+                        engine.payBail(id, turnId);
+                    }
+                    if (!engine.rollDice(id, turnId)) return;
+                }
+                case AWAITING_DECISION -> {
+                    OptionalInt price = engine.buyablePrice();
+                    if (price.isPresent() && player.getMoney() >= RICH_MULTIPLIER * price.getAsInt()) {
+                        engine.buyProperty(id, turnId, player.getPosition());
+                    }
+                    if (!engine.endTurn(id, turnId)) return;
+                }
+                default -> { return; }
+            }
+        }
     }
 }
